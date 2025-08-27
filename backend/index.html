@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ATLAS Debate System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .prose h3 {
+            margin-top: 1.5em;
+            margin-bottom: 0.5em;
+        }
+        .prose p {
+            margin-top: 0.5em;
+        }
+        #loading-spinner {
+            border-top-color: #3498db;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 antialiased">
+
+    <div class="container mx-auto max-w-4xl px-4 py-8 md:py-12">
+        
+        <header class="text-center mb-8">
+            <h1 class="text-4xl md:text-5xl font-bold text-white tracking-tight">ATLAS</h1>
+            <p class="text-lg text-gray-400 mt-2">Authentic Truth Layer Assessment System</p>
+        </header>
+
+        <main class="bg-gray-800 rounded-lg shadow-xl p-6 md:p-8">
+            <form id="debate-form">
+                <div class="space-y-4">
+                    <div>
+                        <label for="topic" class="block text-sm font-medium text-gray-300">Debate Topic</label>
+                        <input type="text" id="topic" name="topic" required
+                            class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                            placeholder="e.g., Is a universal basic income a viable solution?">
+                    </div>
+                    <div>
+                        <label for="model" class="block text-sm font-medium text-gray-300">Select AI Model</label>
+                        <select id="model" name="model"
+                            class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                            <option value="llama3">Llama 3 (Default)</option>
+                            <option value="mistral">Mistral</option>
+                            <option value="gemma">Gemma</option>
+                            <option value="phi3">Phi-3</option>
+                            <option value="cohere">Cohere</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="mt-6">
+                    <button type="submit"
+                        class="w-full inline-flex justify-center items-center py-3 px-6 border border-transparent shadow-sm text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 focus:ring-offset-gray-800 transition-colors">
+                        Run Full Debate
+                    </button>
+                </div>
+            </form>
+        </main>
+
+        <section id="results-container" class="mt-10 hidden">
+            <div id="loading-indicator" class="text-center py-8 hidden">
+                <div id="loading-spinner" class="h-12 w-12 rounded-full border-4 border-gray-600 mx-auto"></div>
+                <p class="mt-4 text-lg text-gray-400">Running debate cycle... This may take a moment.</p>
+            </div>
+            
+            <div id="results-content" class="bg-gray-800 rounded-lg shadow-xl p-6 md:p-8 prose prose-invert max-w-none">
+                <h2 class="text-3xl font-bold border-b border-gray-700 pb-2">Debate Report</h2>
+                
+                <div id="moderator_synthesis"></div>
+                <div id="evidence_summary"></div>
+                <div id="debate_transcript"></div>
+                <div id="audit_report"></div>
+            </div>
+        </section>
+
+    </div>
+
+    <script>
+        const form = document.getElementById('debate-form');
+        const resultsContainer = document.getElementById('results-container');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const resultsContent = document.getElementById('results-content');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            // Get form data
+            const topic = document.getElementById('topic').value;
+            const model = document.getElementById('model').value;
+
+            // Show loading indicator and hide previous results
+            resultsContainer.classList.remove('hidden');
+            loadingIndicator.classList.remove('hidden');
+            resultsContent.classList.add('hidden');
+
+            try {
+                // Call the backend API
+                const response = await fetch('http://127.0.0.1:5000/run_full_debate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ topic, model })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.message || 'An unknown error occurred.');
+                }
+
+                const data = await response.json();
+                
+                // Display the results
+                displayResults(data);
+
+            } catch (error) {
+                console.error('Error:', error);
+                resultsContent.innerHTML = `<h2 class="text-red-400">An Error Occurred</h2><p>${error.message}</p>`;
+            } finally {
+                // Hide loading indicator and show results
+                loadingIndicator.classList.add('hidden');
+                resultsContent.classList.remove('hidden');
+            }
+        });
+
+        function displayResults(data) {
+            // Clear previous results
+            resultsContent.innerHTML = '<h2 class="text-3xl font-bold border-b border-gray-700 pb-2">Debate Report</h2>';
+            
+            // Moderator's Synthesis
+            if (data.moderator_synthesis) {
+                let synthesisHTML = '<h3>Moderator Synthesis</h3>';
+                data.moderator_synthesis.split('\n').forEach(p => {
+                    if (p.trim()) synthesisHTML += `<p>${p.trim()}</p>`;
+                });
+                resultsContent.innerHTML += synthesisHTML;
+            }
+
+            // Evidence Summary
+            if (data.evidence_summary) {
+                let evidenceHTML = '<h3>Evidence Summary</h3>';
+                data.evidence_summary.split('\n').forEach(line => {
+                    if (line.trim().startsWith('-')) {
+                        evidenceHTML += `<p>${line.trim().substring(2)}</p>`;
+                    }
+                });
+                resultsContent.innerHTML += evidenceHTML;
+            }
+
+            // Debate Transcript
+            if (data.debate_transcript) {
+                let transcriptHTML = '<h3>Debate Transcript</h3>';
+                for (const [role, statement] of Object.entries(data.debate_transcript)) {
+                    transcriptHTML += `<h4>${role.replace(/_/g, ' ').toUpperCase()}</h4>`;
+                    statement.split('\n').forEach(p => {
+                        if (p.trim()) transcriptHTML += `<p>${p.trim()}</p>`;
+                    });
+                }
+                resultsContent.innerHTML += transcriptHTML;
+            }
+
+            // Audit Report
+            if (data.audit_report) {
+                let auditHTML = '<h3>Bias Audit Report</h3>';
+                data.audit_report.split('\n').forEach(p => {
+                    if (p.trim()) auditHTML += `<p>${p.trim()}</p>`;
+                });
+                resultsContent.innerHTML += auditHTML;
+            }
+        }
+    </script>
+</body>
+</html>
