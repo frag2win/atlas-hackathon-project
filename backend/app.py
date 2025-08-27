@@ -224,4 +224,4 @@ if __name__ == "__main__":
     if not os.path.exists(DATABASE_FILE):
         print("Database not found. Please run 'python init_db.py' to create it.")
     else:
-        app.run(debug=True)
+          app.run(debug=True)
