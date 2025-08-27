@@ -1,5 +1,6 @@
 // App.jsx
 import React, { useState, useRef, useEffect } from 'react';
+// ... the rest of your code
 import { motion, AnimatePresence } from 'framer-motion';
 
 // This is the main component for the ATLAS application.
