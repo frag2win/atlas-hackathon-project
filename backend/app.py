@@ -6,14 +6,14 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from huggingface_hub import InferenceClient, HfApi
+from huggingface_hub import InferenceClient
 from huggingface_hub.errors import HfHubHTTPError
+from werkzeug.exceptions import BadRequest
 
 # Load variables from .env file
 load_dotenv()
 
 # --- Configurations ---
-# Load all available Hugging Face tokens into a list
 hf_tokens = []
 i = 1
 while True:
@@ -46,23 +46,22 @@ DATABASE_FILE = 'database.db'
 DEBATE_CACHE = {}
 CACHE_EXPIRATION_MINUTES = 60
 
-# --- ROLE PROMPT LIBRARY (Streamlined) ---
+# --- ROLE PROMPTS ---
 ROLE_PROMPTS = {
-    "tech_optimist": """
-    You are a visionary technologist. Your goal is to advocate for the immense potential of AI. Argue against restrictive regulations and emphasize the positive impacts of technology. Your tone should be passionate and forward-looking. Stay in character.
-    """,
-    "ai_ethicist": """
-    You are a cautious AI ethics researcher. Your main concern is the potential for AI to cause harm and amplify bias. Argue for careful safety measures, transparency, and accountability. Your tone should be measured, analytical, and principled. Stay in character.
-    """,
-    "bias_auditor": """
-    You are an impartial Bias Auditor. Your task is to analyze a debate transcript. Identify biases, logical fallacies, and unsubstantiated claims for each participant. Provide a structured, critical analysis for each role.
-    """,
-    "moderator": """
-    You are a skilled and neutral debate moderator. Your task is to synthesize a debate transcript and its accompanying bias audit report into a final, balanced summary with sections for 'Key Points of Consensus', 'Main Areas of Disagreement', and an 'Overall Conclusion'. Base your summary ONLY on the provided text.
-    """,
-    "osint_analyst": """
-    You are a world-class Open-Source Intelligence (OSINT) analyst. Present your findings in the first person. Your report must be structured with the following four sections: 1. 'Sources I Have Analyzed', 2. 'Author and Publication Credibility Assessment', 3. 'Legitimacy of the Information', and 4. 'Final Conclusion'.
-    """
+    "tech_optimist": "You are a visionary technologist. Argue for AI’s potential...",
+    "ai_ethicist": "You are a cautious AI ethics researcher. Argue for safety...",
+    "bias_auditor": "You are an impartial Bias Auditor. Analyze debate bias...",
+    "moderator": "You are a skilled debate moderator. Provide a balanced summary...",
+    "osint_analyst": (
+        "You are a world-class Open-Source Intelligence (OSINT) analyst. "
+        "Present your findings in the first person. Your report must be structured "
+        "with the following four sections: "
+        "1. 'Sources I Have Analyzed', "
+        "2. 'Author and Publication Credibility Assessment', "
+        "3. 'Legitimacy of the Information', "
+        "4. 'Final Conclusion'."
+    ),
+    "generic_agent": "You are a helpful AI assistant."
 }
 
 # --- Helper Functions ---
@@ -79,19 +78,39 @@ def add_log_entry(conn, user_message, ai_response):
 def call_ai_agent(model_id, system_prompt, user_message, max_tokens=1024):
     """
     Calls the Hugging Face API using a pool of tokens with fallback logic.
+    Handles different response formats safely.
     """
     for i, token in enumerate(hf_tokens):
         print(f"Attempting to call AI with token #{i + 1}...")
         try:
             client = InferenceClient(model=model_id, token=token)
             completion = client.chat_completion(
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}],
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message}
+                ],
                 max_tokens=max_tokens,
             )
-            print(f"✅ Success with token #{i + 1}.")
-            return completion.choices[0].message.content
+
+            # 🔎 Debug print
+            print("🔍 Raw completion object:", completion)
+
+            # Handle OpenAI-style dict
+            if hasattr(completion, "choices") and completion.choices:
+                choice = completion.choices[0]
+                if isinstance(choice, dict) and "message" in choice:
+                    return choice["message"].get("content", "")
+                if hasattr(choice, "message"):
+                    return choice.message.get("content", "")
+
+            # Handle HuggingFace text style
+            if hasattr(completion, "generated_text"):
+                return completion.generated_text
+
+            return str(completion)
+
         except HfHubHTTPError as e:
-            if e.response.status_code in [402, 429]: # Payment Required or Too Many Requests
+            if e.response.status_code in [402, 429]:
                 print(f"⚠️ Token #{i + 1} failed: {e}. Trying next token.")
                 continue
             else:
@@ -110,10 +129,10 @@ def get_article_content(topic: str) -> str:
         news_response = requests.get(news_url)
         news_response.raise_for_status()
         articles = news_response.json().get("articles", [])
-        if not articles: return "No relevant articles found."
+        if not articles: 
+            return "No relevant articles found."
 
-        full_text = ""
-        headlines = ""
+        full_text, headlines = "", ""
         for article in articles:
             headlines += f"- Headline: '{article['title']}' (Source: {article['source']['name']})\n"
             url = article['url']
@@ -123,7 +142,14 @@ def get_article_content(topic: str) -> str:
                 content_response = requests.get(reader_url, headers=headers, timeout=20)
                 if content_response.ok:
                     soup = BeautifulSoup(content_response.text, 'html.parser')
-                    full_text += f"--- ARTICLE START ---\nSOURCE: {article['source']['name']}\nHEADLINE: {article['title']}\nAUTHOR: {article.get('author', 'Not specified')}\n\nCONTENT:\n{soup.get_text()}\n--- ARTICLE END ---\n\n"
+                    full_text += (
+                        f"--- ARTICLE START ---\n"
+                        f"SOURCE: {article['source']['name']}\n"
+                        f"HEADLINE: {article['title']}\n"
+                        f"AUTHOR: {article.get('author', 'Not specified')}\n\n"
+                        f"CONTENT:\n{soup.get_text()}\n"
+                        f"--- ARTICLE END ---\n\n"
+                    )
             except requests.exceptions.RequestException as e:
                 print(f"Warning: Could not read URL {url}: {e}")
         
@@ -136,6 +162,14 @@ def get_article_content(topic: str) -> str:
         print(f"❌ Could not fetch news headlines: {e}")
         return "Could not retrieve any news articles."
 
+def get_json_from_request():
+    try:
+        return request.get_json(force=True)
+    except BadRequest:
+        raw_data = request.get_data(as_text=True)
+        print(f"🚨 FAILED TO PARSE JSON. RAW REQUEST DATA:\n---\n{raw_data}\n---")
+        return None
+
 # --- API Endpoints ---
 @app.route("/", methods=['GET'])
 def welcome():
@@ -143,9 +177,9 @@ def welcome():
 
 @app.route("/analyze_topic", methods=['POST'])
 def analyze_topic():
-    data = request.get_json()
+    data = get_json_from_request()
     if not data or 'topic' not in data:
-        return jsonify({"status": "error", "message": "Request body must include 'topic'"}), 400
+        return jsonify({"status": "error", "message": "Request body must be valid JSON and include 'topic'"}), 400
 
     topic = data['topic']
     model_key = data.get("model", DEFAULT_MODEL)
@@ -155,7 +189,6 @@ def analyze_topic():
 
     try:
         article_text = get_article_content(topic)
-        
         system_prompt = ROLE_PROMPTS["osint_analyst"]
         user_message = f"Here is the topic for analysis: '{topic}'.\n\nHere are the source articles I have retrieved:\n{article_text}"
         report = call_ai_agent(model_id, system_prompt, user_message)
@@ -169,9 +202,9 @@ def analyze_topic():
 
 @app.route("/run_debate", methods=['POST'])
 def run_debate():
-    data = request.get_json()
+    data = get_json_from_request()
     if not data or 'topic' not in data:
-        return jsonify({"status": "error", "message": "Request body must include 'topic'"}), 400
+        return jsonify({"status": "error", "message": "Request body must be valid JSON and include 'topic'"}), 400
 
     topic = data['topic']
     model_key = data.get("model", DEFAULT_MODEL)
@@ -224,4 +257,4 @@ if __name__ == "__main__":
     if not os.path.exists(DATABASE_FILE):
         print("Database not found. Please run 'python init_db.py' to create it.")
     else:
-          app.run(debug=True)
+        app.run(debug=True, port=5000)
